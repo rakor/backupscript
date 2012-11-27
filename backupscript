@@ -1,0 +1,258 @@
+#!/usr/bin/perl
+
+$version = "0.6";
+$T_SCRIPTNAME = "backupscript";
+
+$KONFIGDATEI = "/usr/local/etc/backupscriptrc";
+@KONFWERTE = ("nodump", "device", "ziel", "mounten", "mountpfad");
+
+## Ausgabetexte ##
+$T_KONFDATEINICHTDA = "Konfigurationsdatei $KONFIGDATEI nicht vorhanden!\n";
+$T_KONFDATEINICHTOEFFNEN = "Konnte Konfigurationsdatei nicht oeffnen!\n";
+$T_KONFDATEIDEFEKT = "Konfigurationsdatei $KONFIGDATEI ist fehlerhaft!\n";
+$T_MOUNTFEHLER = "Fehler beim Mounten des Zielpfades\n";
+$T_UMOUNTFEHLER = "Fehler beim Unmounten des Zielpfades\n";
+$T_MOUNTVARIABLEFALSCH = "Die Variable 'mounten' wurde gesetzt enthaelt aber keinen zulaessigen Wert. Es wird kein Mountversuch unternommen.\n";
+$T_NODUMPVERZFALSCH = "Ein 'nodump'-Verzeichnis ist falsch";
+$T_ZIELVERZFALSCH = "Das Ziel-Verzeichnis existiert nicht.\n";
+$T_UMOUNTWEGENFEHLER = "Wegen eines Fehlers wurde das Mountverzeichnis vorzeitig getrennt.\n";
+$T_DEVICEVERZFALSCH = "Ein 'device' ist falsch";
+$T_HILFETEXT = "usage:\t$T_SCRIPTNAME [OPTION]\n\n[Options]:\n\t0-9\tDumplevel - Eine Ziffer die das Dumplevel angibt\n\t-h\tLange Hilfe\n\n";
+$T_LANGEHILFE = "Version: $version
+
+Das Script dient der erleichterten Erstellung von Backups unter FreeBSD unter
+Verwendung des Systemprogrammes 'dump'. Zur Steuerung wird eine
+Konfigurationsdatei unter folgendem Link benoetigt:
+
+\t$KONFIGDATEI
+
+Die Datei bietet folgende Parameter:
+        nodump     :   Verzeichnisse die NICHT gesichert werden sollen.
+        device     :   Partition die gesichert werden soll
+        ziel       :   Zielverzeichnis fuer die die Backups
+        mounten    :   'ja' falls vor dem Backup eine Partition gemountet 
+                       werden muss
+        mountpfad  :   Falls das zu mountende Verzeichnis von 'ziel' abweicht.
+
+Das zu mountende Verzeichnis, egal ob extra angegeben oder nicht, muss immer
+unter /etc/fstab aufgefuehrt sein. Es sollte die 'noauto'-Option in /etc/fstab
+verwendet werden damit die Backupplatte nicht unnoetig gemountet bleibt.
+
+Beispiel einer $KONFIGDATEI:
+------------------------------------------------
+nodump = /usr/ports
+nodump = /usr/obj
+nodump = /usr/src
+
+device = /dev/ad4p2
+device = /dev/ad4p4
+device = /dev/ad4p6
+
+mounten = ja
+mountpfad = /data
+ziel = /data/backup
+-------------------------------------------------
+\n";
+
+###########################################################################
+
+sub zeigeHilfe{
+	print $T_HILFETEXT;
+	exit;
+}
+
+###########################################################################
+
+sub zeigeLangeHilfe{
+	print $T_LANGEHILFE;
+	exit;
+}
+
+###########################################################################
+
+sub KonfdateiEinlesen{
+#
+# Liest die Datei ein und speichert die Werte im Array
+# Incl. Ueberpruefung der Werte gegen @KONFWERTE.
+#
+
+	open KDATEI, "<",$KONFIGDATEI or die $T_KONFDATEINICHTOEFFNEN;
+	foreach (<KDATEI>){
+		unless (/^\s*#/ or /^\s*$/){ # keine Leerzeilen oder Kommentare
+			$ok = 0;
+			$_ =~/^\s*(\S+)\s*=\s*(.*?)\s*$/; # $1=Parameter; $2=Wert
+			foreach (@KONFWERTE){	# Testen ob Werte zulaessig sind
+				$ok = 1 if ($_ eq $1);
+			}
+			die $T_KONFDATEIDEFEKT unless $ok;
+			## Verarbeitung der Daten
+				if ($1 eq "nodump"){
+					push @nodump, $2;
+				}
+				elsif($1 eq "device"){
+					push @device, $2;
+				}
+				elsif($1 eq "ziel"){
+					$ziel = $2;
+				}
+				elsif($1 eq "mounten"){
+					if ($2 =~ /^[jJ][aA]$/){
+						$mounten = 1;
+					}
+					else{
+						warn $T_MOUNTVARIABLEFALSCH; 
+					}
+				}
+				elsif($1 eq "mountpfad"){
+					$mountpfad = $2;
+				}
+			## Ende Verarbeitung der Daten		
+		}
+	}
+	close $KDATEI;
+} # Ende sub KonfdateiEinlesen
+
+###########################################################################
+
+sub zielpfadZuschneiden{
+	$ziel =~s/^(.*?)\/?$/$1/;
+}
+
+###########################################################################
+
+sub istZielGemountet{
+	$gefunden = 0;
+	@gemountet = `mount`;
+	foreach (@gemountet){
+		$gefunden = 1 if (/$_[0]/);
+	}
+	$gefunden;
+}
+
+###########################################################################
+
+sub zielMounten{
+	unless (defined $mountpfad){
+		$mountpfad = $ziel;
+	}
+	unless (&istZielGemountet($mountpfad)){
+		!system "mount $mountpfad" or die "$T_MOUNTFEHLER";
+	}
+}
+
+###########################################################################
+
+sub zielUmounten{
+	unless (defined $mountpfad){
+		$mountpfad = $ziel;
+	}
+	if (&istZielGemountet($mountpfad)){
+		!system "umount $mountpfad" or die "$T_UMOUNTFEHLER";
+	}
+}
+
+###########################################################################
+
+sub konfigAufSinnTesten{
+	die $T_KONFDATEIDEFEKT unless (defined $ziel and defined @device)
+
+}
+
+###########################################################################
+
+sub VerzeichnissePruefen{
+	foreach (@nodump){
+		warn "$T_NODUMPVERZFALSCH: $_\n" unless (-e $_);
+	}
+	
+	unless (-d $ziel){	
+		&zielUmounten if (defined $mounten);
+		warn $T_UMOUNTWEGENFEHLER;
+		die $T_ZIELVERZFALSCH;
+	}
+
+	foreach (@device){
+		die "$T_DEVICEVERZFALSCH: $_\n" unless (-e $_);
+	}
+}
+
+###########################################################################
+
+sub dateiinfosAusgeben{
+	@Einheiten = ("B", "kB", "MB", "GB", "TB");
+	$division = 0;
+	if (-e $_[0]){
+		$groesse = -s $_[0];
+		while ($groesse >= 1024){
+			$groesse = $groesse / 1024;
+			$division += 1;
+		}
+	}
+	$ausgabe = sprintf("%s %.2f %s",$_, $groesse, $Einheiten[$division]);
+	print "$ausgabe\n";
+}
+
+###########################################################################
+
+# Parameter abpruefen
+&zeigeLangeHilfe if ($ARGV[0] eq "-h");
+&zeigeHilfe unless ($ARGV[0] =~/^\d$/);
+$dumplevel = $ARGV[0];
+
+# Ist Konfigdatei da?
+die $T_KONFDATEINICHTDA unless (-f $KONFIGDATEI);
+
+
+# Konfigdatei abarbeiten
+&KonfdateiEinlesen;
+&konfigAufSinnTesten;
+&zielpfadZuschneiden;
+# Muessen wir mounten? Dann los.
+&zielMounten if (defined $mounten);
+# Zielverzeichnis kann ggf erst nach dem Mounten geprueft werden.
+&VerzeichnissePruefen;
+
+# Vorarbeiten... gemountete Laufwerke einlesen und Datumstring erzeugen
+@mounts = `mount`;
+($sek, $min, $std, $mtag, $mon, $jahr, , ,) = localtime(time); 
+$datum = sprintf("%04d%02d%02d",$jahr+1900,$mon+1,$mtag); 
+
+
+foreach (@device){
+	$deviceName = $_;
+	foreach (@mounts){
+		$_ =~/^\s*(.*) on (.*)\s+\(/;
+		$devicenodepfadausmount = $1;
+		$devicemountpfad = $2;
+		if ($devicenodepfadausmount=~/$deviceName$/){
+			if ($devicemountpfad eq "/") { $devicemountpfad="root" }
+			else{
+				$devicemountpfad =~ s/^\/(.*)$/$1/;
+				$devicemountpfad =~ s/\//_/g;
+			 }
+			$devicemountpfad{$deviceName}=$devicemountpfad;
+		}
+	}
+}
+
+# 'nodump' setzen
+foreach (@nodump){
+	system ("/bin/chflags -R nodump $_") if (-e $_);
+}
+
+# dumps durchfuehren
+foreach (@device){
+	/^.*?([^\/]+)$/;
+	$deviceKurzName = $1;
+	$dumpDateiname = "$ziel/$devicemountpfad{$_}-$deviceKurzName-$datum-L$dumplevel";
+	push @erzeugteDateien, $dumpDateiname;
+	system ("/sbin/dump -$dumplevel -h0 -Lauf $dumpDateiname $_");
+}
+
+# Dateigroessen ausgeben
+print "\nEs wurden folgende Dumps angelegt:\n";
+foreach (@erzeugteDateien){
+	&dateiinfosAusgeben($_);
+}
+
+&zielUmounten if (defined $mounten);
