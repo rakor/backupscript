@@ -1,15 +1,25 @@
 #!/usr/bin/perl
 
-$version = "0.6";
+$version = "0.7";
 $T_SCRIPTNAME = "backupscript";
 
+$OPENSSL = "/usr/bin/openssl";
 $KONFIGDATEI = "/usr/local/etc/backupscriptrc";
-@KONFWERTE = ("nodump", "device", "ziel", "mounten", "mountpfad");
+@KONFWERTE = ("nodump", "device", "ziel", "mounten", "mountpfad", "cipher", "methode", "key", "keyfile", "quelle", "tarfile");
+
+$methode = "dump"; # Standard und somit Kompartible zu ver < 0.7
+$tarErweiterung = "tgz";
 
 ## Ausgabetexte ##
 $T_KONFDATEINICHTDA = "Konfigurationsdatei $KONFIGDATEI nicht vorhanden!\n";
 $T_KONFDATEINICHTOEFFNEN = "Konnte Konfigurationsdatei nicht oeffnen!\n";
 $T_KONFDATEIDEFEKT = "Konfigurationsdatei $KONFIGDATEI ist fehlerhaft!\n";
+$T_KONFDATEIDEFEKT_TAR_DEVICE = "Konfigurationsdatei $KONFIGDATEI ist fehlerhaft! Wenn die Methode tar gewählt ist darf kein \"device\" definiert sein. \n";
+$T_KONFDATEIDEFEKT_TAR_OUTPUT = "Konfigurationsdatei $KONFIGDATEI ist fehlerhaft! Wenn die Methode tar gewählt ist muss der Outputname in \"tarfile\" definiert sein. \n";
+$T_KONFDATEIDEFEKT_DUMP_TAROPTS = "Konfigurationsdatei $KONFIGDATEI ist fehlerhaft! Wenn die Methode dump gewählt ist darf weder \"tarfile\" noch \"quelle\" definiert sein. \n";
+$T_KONFDATEIDEFEKT_KEY_KEYFILE = "Konfigurationsdatei $KONFIGDATEI ist fehlerhaft! Es darf entweder \"key\" oder \"keyfile\" definiert sein, nicht beide.\n";
+$T_KONFDATEIDEFEKT_KEY_NOCIPHER = "Konfigurationsdatei $KONFIGDATEI ist fehlerhaft! Um die Verschlüsselung der Zieldatei zu aktivieren muss \"cipher\" mit einer openssl-kompatiblen Verschlüsselung gesetzt werden. (z.B. aes256)\n";
+$T_KONFDATEIDEFEKT_CIPHER_NOKEY = "Konfigurationsdatei $KONFIGDATEI ist fehlerhaft! \n";
 $T_MOUNTFEHLER = "Fehler beim Mounten des Zielpfades\n";
 $T_UMOUNTFEHLER = "Fehler beim Unmounten des Zielpfades\n";
 $T_MOUNTVARIABLEFALSCH = "Die Variable 'mounten' wurde gesetzt enthaelt aber keinen zulaessigen Wert. Es wird kein Mountversuch unternommen.\n";
@@ -17,6 +27,8 @@ $T_NODUMPVERZFALSCH = "Ein 'nodump'-Verzeichnis ist falsch";
 $T_ZIELVERZFALSCH = "Das Ziel-Verzeichnis existiert nicht.\n";
 $T_UMOUNTWEGENFEHLER = "Wegen eines Fehlers wurde das Mountverzeichnis vorzeitig getrennt.\n";
 $T_DEVICEVERZFALSCH = "Ein 'device' ist falsch";
+$T_SCHLUESSELLAENGEZUKURZ = "Die Länge des gewählten Schlüssels zur Verschlüsselung ist zu kurz. Zur Sicheren Verschlüsselung bitte einen längeren Schlüssel definieren\n";
+$T_KEYFILENICHTNUTZBAR = "Das Keyfile zur Verschlüsselung wurde nicht gefunden. Bitte prüfen Sie ob es existiert und gelesen werden kann.\n";
 $T_HILFETEXT = "usage:\t$T_SCRIPTNAME [OPTION]\n\n[Options]:\n\t0-9\tDumplevel - Eine Ziffer die das Dumplevel angibt\n\t-h\tLange Hilfe\n\n";
 $T_LANGEHILFE = "Version: $version
 
@@ -92,6 +104,9 @@ sub KonfdateiEinlesen{
 				elsif($1 eq "device"){
 					push @device, $2;
 				}
+				elsif($1 eq "quelle"){
+					push @quellverzeichnisse, $2;
+				}
 				elsif($1 eq "ziel"){
 					$ziel = $2;
 				}
@@ -105,6 +120,28 @@ sub KonfdateiEinlesen{
 				}
 				elsif($1 eq "mountpfad"){
 					$mountpfad = $2;
+				}
+				elsif($1 eq "cipher"){
+					$cipher = $2;
+				}
+				elsif($1 eq "tarfile"){
+					$tarOutput = $2;
+				}
+				elsif($1 eq "methode"){
+					unless ($2 eq "tar" or $2 eq "dump"){
+						warn $T_METHODENVARIABLEFALSCH;
+					}
+					if ($2 eq "tar"){
+						$methode = "tar";
+					} else {
+						$methode = "dump";
+					}
+				}
+				elsif($1 eq "key"){
+					$key = $2;
+				}
+				elsif($1 eq "keyfile"){
+					$keyfile = $2;
 				}
 			## Ende Verarbeitung der Daten		
 		}
@@ -154,8 +191,13 @@ sub zielUmounten{
 ###########################################################################
 
 sub konfigAufSinnTesten{
-	die $T_KONFDATEIDEFEKT unless (defined $ziel and defined @device)
-
+	die $T_KONFDATEIDEFEKT_TAR_DEVICE	if ($methode eq "tar" and defined @device);
+	die $T_KONFDATEIDEFEKT_TAR_OUTPUT 	if ($methode eq "tar" and not defined $tarOutput);
+	die $T_KONFDATEIDEFEKT_DUMP_TAROPTS if (($methode eq "dump" and defined @quellverzeichnisse) or ($methode eq "dump" and defined $tarOutput));
+	die $T_KONFDATEIDEFEKT 			unless (defined $ziel and (defined @device or defined @quellverzeichnisse));
+	die $T_KONFDATEIDEFEKT_KEY_KEYFILE  if (defined $key and defined $keyfile);
+	die $T_KONFDATEIDEFEKT_CIPHER_NOKEY if (defined $cipher and not (defined $keyfile or defined $key));
+	die $T_KONFDATEIDEFEKT_KEY_NOCIPHER if ((defined $keyfile or defined $key) and not defined $cipher);
 }
 
 ###########################################################################
@@ -178,6 +220,23 @@ sub VerzeichnissePruefen{
 
 ###########################################################################
 
+sub cipherpipeErzeugen{
+	if (defined $cipher){
+		$cipherpipe = "| $OPENSSL enc -$cipher -e -salt -out $_[0]";
+		if (defined $key){
+			warn $T_SCHLUESSELLAENGEZUKURZ if (length $key < 8);
+		} elsif (defined $keyfile){
+			die $T_KEYFILENICHTNUTZBAR unless (-e $keyfile and -r $keyfile);
+		}
+		return "-";
+	} else {
+		$cipherpipe = "";
+		return $_[0];
+	}
+}
+
+###########################################################################
+
 sub dateiinfosAusgeben{
 	@Einheiten = ("B", "kB", "MB", "GB", "TB");
 	$division = 0;
@@ -187,8 +246,10 @@ sub dateiinfosAusgeben{
 			$groesse = $groesse / 1024;
 			$division += 1;
 		}
+		$ausgabe = sprintf("%s %.2f %s",$_, $groesse, $Einheiten[$division]);
+	} else {
+		$ausgabe = "$_ wurde nicht angelegt!";
 	}
-	$ausgabe = sprintf("%s %.2f %s",$_, $groesse, $Einheiten[$division]);
 	print "$ausgabe\n";
 }
 
@@ -196,8 +257,6 @@ sub dateiinfosAusgeben{
 
 # Parameter abpruefen
 &zeigeLangeHilfe if ($ARGV[0] eq "-h");
-&zeigeHilfe unless ($ARGV[0] =~/^\d$/);
-$dumplevel = $ARGV[0];
 
 # Ist Konfigdatei da?
 die $T_KONFDATEINICHTDA unless (-f $KONFIGDATEI);
@@ -206,53 +265,84 @@ die $T_KONFDATEINICHTDA unless (-f $KONFIGDATEI);
 # Konfigdatei abarbeiten
 &KonfdateiEinlesen;
 &konfigAufSinnTesten;
+
+if ($methode eq "dump"){
+	&zeigeHilfe unless ($ARGV[0] =~/^\d$/);
+	$dumplevel = $ARGV[0];
+} else {
+	&zeigeHilfe if ($#ARGV > -1);
+}
+
 &zielpfadZuschneiden;
 # Muessen wir mounten? Dann los.
 &zielMounten if (defined $mounten);
 # Zielverzeichnis kann ggf erst nach dem Mounten geprueft werden.
 &VerzeichnissePruefen;
 
-# Vorarbeiten... gemountete Laufwerke einlesen und Datumstring erzeugen
-@mounts = `mount`;
+# Datumsstring erzeugen
 ($sek, $min, $std, $mtag, $mon, $jahr, , ,) = localtime(time); 
 $datum = sprintf("%04d%02d%02d",$jahr+1900,$mon+1,$mtag); 
 
 
-foreach (@device){
-	$deviceName = $_;
-	foreach (@mounts){
-		$_ =~/^\s*(.*) on (.*)\s+\(/;
-		$devicenodepfadausmount = $1;
-		$devicemountpfad = $2;
-		if ($devicenodepfadausmount=~/$deviceName$/){
-			if ($devicemountpfad eq "/") { $devicemountpfad="root" }
-			else{
-				$devicemountpfad =~ s/^\/(.*)$/$1/;
-				$devicemountpfad =~ s/\//_/g;
-			 }
-			$devicemountpfad{$deviceName}=$devicemountpfad;
+if ($methode eq "dump"){
+	# Vorarbeiten... gemountete Laufwerke einlesen
+	@mounts = `mount`;
+
+	foreach (@device){
+		$deviceName = $_;
+		foreach (@mounts){
+			$_ =~/^\s*(.*) on (.*)\s+\(/;
+			$devicenodepfadausmount = $1;
+			$devicemountpfad = $2;
+			if ($devicenodepfadausmount=~/$deviceName$/){
+				if ($devicemountpfad eq "/") { $devicemountpfad="root" }
+				else{
+					$devicemountpfad =~ s/^\/(.*)$/$1/;
+					$devicemountpfad =~ s/\//_/g;
+			 	}
+				$devicemountpfad{$deviceName}=$devicemountpfad;
+			}
 		}
 	}
-}
 
-# 'nodump' setzen
-foreach (@nodump){
-	system ("/bin/chflags -R nodump $_") if (-e $_);
-}
+	# 'nodump' setzen falls dump verwendet wird
+	foreach (@nodump){
+		system ("/bin/chflags -R nodump $_") if (-e $_);
+	}
 
-# dumps durchfuehren
-foreach (@device){
-	/^.*?([^\/]+)$/;
-	$deviceKurzName = $1;
-	$dumpDateiname = "$ziel/$devicemountpfad{$_}-$deviceKurzName-$datum-L$dumplevel";
-	push @erzeugteDateien, $dumpDateiname;
-	system ("/sbin/dump -$dumplevel -h0 -Lauf $dumpDateiname $_");
+	# dumps durchfuehren
+	foreach (@device){
+		/^.*?([^\/]+)$/;
+		$deviceKurzName = $1;
+		$dumpDateiname = "$ziel/$devicemountpfad{$_}-$deviceKurzName-$datum-L$dumplevel";
+		push @erzeugteDateien, $dumpDateiname;
+		$dumpOutputDateiname = &cipherpipeErzeugen($dumpDateiname);
+		system ("/sbin/dump -$dumplevel -h0 -Lauf $dumpOutputDateiname $_ $cipherpipe");
+	}
+} elsif ($methode eq "tar"){
+	if (defined @nodump){
+		$exclude = "";
+		foreach (@nodump){
+			$exclude = $exclude." --exclude $_";
+		}
+	}
+	$tarOutput =~ s/^([^\.]*)\.(.*?)$/$1/;;
+	if (length $2 > 1){
+		$tarErweiterung = $2;
+	} 
+	$output = "$tarOutput-$datum.$tarErweiterung";
+	push @erzeugteDateien, $output; 
+	$tarOutputDateiname = &cipherpipeErzeugen($output);
+	system ("/usr/bin/tar -czf $tarOutputDateiname $exclude @quellverzeichnisse $cipherpipe");
 }
 
 # Dateigroessen ausgeben
-print "\nEs wurden folgende Dumps angelegt:\n";
+print "\nEs wurden folgende Backups durch $methode angelegt"; 
+print " und mittels $cipher verschlüsselt" if (defined $cipher);
+print ":\n";
 foreach (@erzeugteDateien){
 	&dateiinfosAusgeben($_);
+
 }
 
 &zielUmounten if (defined $mounten);
