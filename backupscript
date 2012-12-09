@@ -385,7 +385,7 @@ if ($methode eq "dump"){
 			$zippipe = "";
 		}
 		push @erzeugteDateien, $dumpDateiname;
-		system ("$DUMP -$dumplevel -h0 -Lauf - $_ $zippipe $cipherpipe > $dumpDateiname");
+		system ("$DUMP -$dumplevel -h0 -Lauf - $_ $zippipe $cipherpipe | dd of=$dumpDateiname");
 	}
 } elsif ($methode eq "tar"){
 	if (defined @nodump){
@@ -408,7 +408,7 @@ if ($methode eq "dump"){
 	}
 	push @erzeugteDateien, $output; 
 	$tarOutputDateiname = &cipherpipeErzeugen($output);
-	system ("$TAR -c $z -f - $exclude --exclude $output @quellverzeichnisse $cipherpipe > $output");
+	system ("$TAR -c $z -f - $exclude --exclude $output @quellverzeichnisse $cipherpipe | dd of=$output");
 }
 
 # Dateigroessen ausgeben
