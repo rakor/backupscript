@@ -3,12 +3,20 @@
 $version = "0.7";
 $T_SCRIPTNAME = "backupscript";
 
-$OPENSSL = "/usr/bin/openssl";
+$OPENSSL 	= "/usr/bin/openssl";
+$TAR		= "/usr/bin/tar";
+$DUMP		= "/sbin/dump";
+$CHFLAGS	= "/bin/chflags";
+$MOUNT		= "/sbin/mount";
+$UMOUNT		= "/sbin/umount";
+$GZIP		= "/usr/bin/gzip";
+
 $KONFIGDATEI = "/usr/local/etc/backupscriptrc";
-@KONFWERTE = ("nodump", "device", "ziel", "mounten", "mountpfad", "cipher", "methode", "key", "keyfile", "quelle", "tarfile");
+@KONFWERTE = ("nodump", "device", "ziel", "mounten", "mountpfad", "cipher", "methode", "key", "keyfile", "quelle", "tarfile", "zip");
 
 $methode = "dump"; # Standard und somit Kompartible zu ver < 0.7
-$tarErweiterung = "tgz";
+$tarErweiterung = "tar";
+$default_tar_name = "backup";
 
 ## Ausgabetexte ##
 $T_KONFDATEINICHTDA = "Konfigurationsdatei $KONFIGDATEI nicht vorhanden!\n";
@@ -49,6 +57,8 @@ Die Datei bietet folgende Parameter:
                            werden muss.
             mountpfad  :   Falls das zu mountende Verzeichnis von 'ziel'
                            abweicht.
+            zip        :   'ja' falls das Backup komprimiert werden soll.
+                           Zur Komprimierung wird gzip verwendet.
 
         Parameter für Verschlüsselung
             cipher     :   Eine OpenSSL-kompatible Verschlüsselungsmethode.
@@ -64,7 +74,8 @@ Die Datei bietet folgende Parameter:
             device     :   Partition die gesichert werden soll
 		
         Parameter ausschliesslich für tar-Backups
-            tarfile    :   Name des erzeugten tar-Archivs.
+            tarfile    :   Name des erzeugten tar-Archivs. Nur der Name,
+                           die Erweiterung wird automatisch ergänzt.
             quelle     :   Verzeichnisse die gesichert werden sollen. Je ein
                            Eintrag pro Verzeichnis.
 
@@ -93,6 +104,7 @@ Beispiel einer $KONFIGDATEI für tar-basierte, verschlüsselte Backups:
 ------------------------------------------------
 method    = tar
 tarfile   = backup
+zip       = ja
 ciper     = aes256
 key       = testpasswort
 
@@ -149,6 +161,14 @@ sub KonfdateiEinlesen{
 				}
 				elsif($1 eq "ziel"){
 					$ziel = $2;
+				}
+				elsif($1 eq "zip"){
+					if ($2 =~/^[jJ][aA]$/){
+						$zip = 1;
+					}
+					else{
+						warn $T_ZIPVARIABLEFALSCH;
+					}
 				}
 				elsif($1 eq "mounten"){
 					if ($2 =~ /^[jJ][aA]$/){
@@ -213,7 +233,7 @@ sub zielMounten{
 		$mountpfad = $ziel;
 	}
 	unless (&istZielGemountet($mountpfad)){
-		!system "mount $mountpfad" or die "$T_MOUNTFEHLER";
+		!system "$MOUNT $mountpfad" or die "$T_MOUNTFEHLER";
 	}
 }
 
@@ -224,7 +244,7 @@ sub zielUmounten{
 		$mountpfad = $ziel;
 	}
 	if (&istZielGemountet($mountpfad)){
-		!system "umount $mountpfad" or die "$T_UMOUNTFEHLER";
+		!system "$UMOUNT $mountpfad" or die "$T_UMOUNTFEHLER";
 	}
 }
 
@@ -262,7 +282,7 @@ sub VerzeichnissePruefen{
 
 sub cipherpipeErzeugen{
 	if (defined $cipher){
-		$cipherpipe = "| $OPENSSL enc -$cipher -e -salt -out $_[0] -pass";
+		$cipherpipe = "| $OPENSSL enc -$cipher -e -salt -pass";
 		if (defined $key){
 			warn $T_SCHLUESSELLAENGEZUKURZ if (length $key < 8);
 			$cipherpipe = $cipherpipe." pass:$key"
@@ -349,7 +369,7 @@ if ($methode eq "dump"){
 
 	# 'nodump' setzen falls dump verwendet wird
 	foreach (@nodump){
-		system ("/bin/chflags -R nodump $_") if (-e $_);
+		system ("$CHFLAGS -R nodump $_") if (-e $_);
 	}
 
 	# dumps durchfuehren
@@ -357,9 +377,15 @@ if ($methode eq "dump"){
 		/^.*?([^\/]+)$/;
 		$deviceKurzName = $1;
 		$dumpDateiname = "$ziel/$devicemountpfad{$_}-$deviceKurzName-$datum-L$dumplevel";
+		&cipherpipeErzeugen($dumpDateiname);
+		if (defined $zip){
+			$zippipe = " | $GZIP";
+			$dumpDateiname = "$dumpDateiname.gz";
+		} else {
+			$zippipe = "";
+		}
 		push @erzeugteDateien, $dumpDateiname;
-		$dumpOutputDateiname = &cipherpipeErzeugen($dumpDateiname);
-		system ("/sbin/dump -$dumplevel -h0 -Lauf $dumpOutputDateiname $_ $cipherpipe");
+		system ("$DUMP -$dumplevel -h0 -Lauf - $_ $zippipe $cipherpipe > $dumpDateiname");
 	}
 } elsif ($methode eq "tar"){
 	if (defined @nodump){
@@ -368,15 +394,21 @@ if ($methode eq "dump"){
 			$exclude = $exclude." --exclude $_";
 		}
 	}
-	$tarOutput = "backup" unless (defined $tarOutput);
+	$tarOutput = $default_tar_name unless (defined $tarOutput);
 	$tarOutput =~ s/^([^\.]*)\.(.*?)$/$1/;;
 	if (length $2 > 1){
 		$tarErweiterung = $2;
 	} 
 	$output = "$ziel/$tarOutput-$datum.$tarErweiterung";
+	if (defined $zip){
+		$z = "-z";
+		$output = "$output.gz";
+	} else {
+		$z ="";
+	}
 	push @erzeugteDateien, $output; 
 	$tarOutputDateiname = &cipherpipeErzeugen($output);
-	system ("/usr/bin/tar -czf $tarOutputDateiname $exclude --exclude $output @quellverzeichnisse $cipherpipe");
+	system ("$TAR -c $z -f - $exclude --exclude $output @quellverzeichnisse $cipherpipe > $output");
 }
 
 # Dateigroessen ausgeben
