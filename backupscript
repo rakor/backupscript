@@ -1,6 +1,6 @@
 #!/usr/bin/perl
 
-$version = "0.7";
+$version = "0.8";
 $T_SCRIPTNAME = "backupscript";
 
 $OPENSSL 	= "/usr/bin/openssl";
@@ -37,7 +37,7 @@ $T_UMOUNTWEGENFEHLER = "Wegen eines Fehlers wurde das Mountverzeichnis vorzeitig
 $T_DEVICEVERZFALSCH = "Ein 'device' ist falsch";
 $T_SCHLUESSELLAENGEZUKURZ = "Die Länge des gewählten Schlüssels zur Verschlüsselung ist zu kurz. Zur Sicheren Verschlüsselung bitte einen längeren Schlüssel definieren\n";
 $T_KEYFILENICHTNUTZBAR = "Das Keyfile zur Verschlüsselung wurde nicht gefunden. Bitte prüfen Sie ob es existiert und gelesen werden kann.\n";
-$T_HILFETEXT = "usage:\t$T_SCRIPTNAME [OPTION]\n\n[Options]:\n\t0-9\tDumplevel - Eine Ziffer die das Dumplevel angibt\n\t-h\tLange Hilfe\n\n";
+$T_HILFETEXT = "usage:\t$T_SCRIPTNAME [OPTION]\n\n[Options]:\n\t0-9\tDumplevel - Eine Ziffer die das Dumplevel angibt (nur bei Backups mit dump)\n\t-h\tLange Hilfe\n\n";
 $T_LANGEHILFE = "Version: $version
 
 Das Script dient der erleichterten Erstellung von Backups unter FreeBSD unter
@@ -346,7 +346,7 @@ if ($methode eq "dump"){
 $datum = sprintf("%04d%02d%02d",$jahr+1900,$mon+1,$mtag); 
 
 
-if ($methode eq "dump"){
+if ($methode eq "dump"){	# FALLS MIT DUMP GEARBEITET WIRD
 	# Vorarbeiten... gemountete Laufwerke einlesen
 	@mounts = `mount`;
 
@@ -387,7 +387,7 @@ if ($methode eq "dump"){
 		push @erzeugteDateien, $dumpDateiname;
 		system ("$DUMP -$dumplevel -h0 -Lauf - $_ $zippipe $cipherpipe | dd of=$dumpDateiname");
 	}
-} elsif ($methode eq "tar"){
+} elsif ($methode eq "tar"){	# FALLS MIT TAR GEARBEITET WIRD
 	if (defined @nodump){
 		$exclude = "";
 		foreach (@nodump){
