@@ -251,10 +251,10 @@ sub zielUmounten{
 ###########################################################################
 
 sub konfigAufSinnTesten{
-	die $T_KONFDATEIDEFEKT_TAR_DEVICE	if ($methode eq "tar" and defined @device);
+	die $T_KONFDATEIDEFEKT_TAR_DEVICE	if ($methode eq "tar" and @device);
 #	die $T_KONFDATEIDEFEKT_TAR_OUTPUT 	if ($methode eq "tar" and not defined $tarOutput);
-	die $T_KONFDATEIDEFEKT_DUMP_TAROPTS if (($methode eq "dump" and defined @quellverzeichnisse) or ($methode eq "dump" and defined $tarOutput));
-	die $T_KONFDATEIDEFEKT 			unless (defined $ziel and (defined @device or defined @quellverzeichnisse));
+	die $T_KONFDATEIDEFEKT_DUMP_TAROPTS if (($methode eq "dump" and @quellverzeichnisse) or ($methode eq "dump" and defined $tarOutput));
+	die $T_KONFDATEIDEFEKT 			unless (defined $ziel and (@device or @quellverzeichnisse));
 	die $T_KONFDATEIDEFEKT_KEY_KEYFILE  if (defined $key and defined $keyfile);
 	die $T_KONFDATEIDEFEKT_CIPHER_NOKEY if (defined $cipher and not (defined $keyfile or defined $key));
 	die $T_KONFDATEIDEFEKT_KEY_NOCIPHER if ((defined $keyfile or defined $key) and not defined $cipher);
@@ -388,7 +388,7 @@ if ($methode eq "dump"){	# FALLS MIT DUMP GEARBEITET WIRD
 		system ("$DUMP -$dumplevel -h0 -Lauf - $_ $zippipe $cipherpipe | dd of=$dumpDateiname");
 	}
 } elsif ($methode eq "tar"){	# FALLS MIT TAR GEARBEITET WIRD
-	if (defined @nodump){
+	if (@nodump){
 		$exclude = "";
 		foreach (@nodump){
 			$exclude = $exclude." --exclude $_";
